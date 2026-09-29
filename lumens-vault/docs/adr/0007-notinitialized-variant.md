@@ -6,52 +6,55 @@ Accepted
 
 ## Context
 
-The contract defines an `Error::NotInitialized` variant that is returned when the `Admin`, `Config`, or `State` entry is missing from instance storage. The contract's `__constructor` runs atomically at deploy time and writes all three entries. Therefore it is not obvious whether any reachable execution path can observe missing instance state.
+The contract defines an `Error::NotInitialized` variant that is returned when one of the three instance-storage entries (`Admin`, `Config`, or `State`) is missing. The contract's `__constructor` runs atomically during deployment and writes all three entries. Therefore it is not obvious whether any reachable execution path can observe a missing instance entry.
 
-NFR-2 requires every `Error` variant to be triggered by a test. A dead variant cannot satisfy this requirement, so the reachability of `NotInitialized` must be resolved explicitly rather than left to fail review later.
+NFR-2 requires every `Error` variant to be triggered by a test. A variant that is unreachable cannot satisfy this requirement, so the question of reachability must be resolved explicitly rather than left to fail review later.
 
-This project has previously made incorrect claims about Sororan runtime behavior by reasoning from first principles. Accordingly, the finding below is based on the Stellar documentation and the Sororan environment documentation, with citations.
+This is exactly the class of claim the project has gotten wrong before, so the finding below is based on Stellar documentation rather than reasoning from first principles alone.
+
+## Question
+
+Can any reachable path observe missing instance state? In particular, does instance storage archival and restoration leave the instance entry and its data intact?
+
+## Finding
+
+Unreachable.
+
+The relevant Stellar documentation is the persistent entry lifecycle described in the Soroban documentation on persistent entries and archival.
+
+- Soroban developer docs, Persistent Entries: https://developers.stellar.org/docs/learn/soroban-persistent-entries
+- Soroban developer docs, State Archival: https://developers.stellar.org/docs/learn/soroban-state-archival
+
+Key points from those documents:
+
+1. The contract instance entry (the `ContractDataInstance` ledger entry) stores the contract code hash, the contract execution environment, and the contract's instance storage. It is the entry that must exist for any contract call to succeed at all.
+
+2. When a contract instance entry is archived, Sororan moves the entire entry -- including its instance storage -- into the archive. The entry and its data are preserved verbatim.
+
+3. A contract whose instance entry was archived cannot be invoked until it is restored. Attempting to invoke it while archived fails at the host level before any contract code runs; the contract function is never entered and thus never observes missing instance storage.
+
+4. When the instance entry is restored, it is restored with the same data it held before archival. Restoration does not reinitialize the contract or re-run its constructor; it merely reinstates the previously archived entry.
+
+Together these facts mean that the instance entry and the instance storage written by `__constructor` are either both present or both absent from the perspective of running contract code. When the entry is absent, no contract code runs at all, so `Error::NotInitialized` cannot be returned. There is no path by which a contract function executes while one of `Admin`, `Config`, or `State` is missing.
+
+The constructor being atomic at deploy closes the only other window in which a partially initialized instance could exist. There is no external way to delete individual instance storage keys without deleting or archiving the whole instance entry.
 
 ## Decision
 
-The `NotInitialized` variant is **reachable**. It is retained and a test triggers it, satisfying NFR-2.
+Remove the `Error::NotInitialized` variant from the contract error enum, and remove the corresponding checks that return it.
 
-## Rationale
-
-### Instance storage archival and restoration
-
-Sororan stores contract instance state in a separate ledger entry from the contract code. On Stellar, ledger entries can be archived when they exceed the live state budget and can later be restored. The Stellar documentation on state archival describes this explicitly:
-
-> "Soroban contracts have two kinds of state: the contract code and the contract instance. ... When a contract instance is archived, its state is moved to the archive and is no longer available to the contract."
-
-- Stellar Developers, Persistent and Temporary State / State Archival: <https://developers.stellar.org/docs/learn/soroban/archival>
-
-When an instance entry is archived, the contract's instance storage is not available to execution. A call to a function that reads instance storage will therefore observe the entries as absent (unless the call is made through a restore operation that first restores the instance).
-
-### Restoration retains data
-
-When an archived instance is restored, the data that was present at archival time is returned to live state. The Stellar documentation states:
-
-> "Restoring a contract instance returns it to the live state, including all of its storage."
-
-- Stellar Developers, State Archival: <https://developers.stellar.org/docs/learn/soroban/archival>
-
-This means a contract whose instance entry was archived and then restored retains its data. The `NotInitialized` error is not observed in that case.
-
-### The reachable path
-
-The reachable path is a call to an entry point that reads instance storage while the instance entry is archived and not restored. In that state, `Admin`, `Config`, and `State` are all missing from the contract's view of instance storage, and the contract returns `NotInitialized`.
-
-The contract can also be invoked in a manner where the instance is archived before the call and the call does not attempt a restore. This is the path the test exercises.
+Error codes are not renumbered. Removing a variant leaves a gap in the numeric sequence; the remaining variants keep their existing numbers. This preserves the on-chain ABI for all existing error codes and avoids silently changing the meaning of any code already observed by clients.
 
 ## Consequences
 
-- `Error::NotInitialized` is retained in the error enum.
-- Error codes are not renumbered; remaining variants keep their existing numbers.
-- A test triggers `NotInitialized` by invoking an entry point against a contract whose instance entry is archived, satisfying NFR-2.
+- NFR-2 is satisfied because every remaining `Error` variant is reachable and can be triggered by a test.
+- Error codes for all other variants are unchanged. The numeric value previously assigned to `NotInitialized` is not reused by any other variant.
+- Clients that matched on the removed code will no longer receive it, but that code was unreachable in practice, so no real client behavior changes.
+- The contract no longer needs the defensive instance-storage reads that only existed to produce this error.
 
 ## References
 
-- Stellar Developers - State Archival: <https://developers.stellar.org/docs/learn/soroban/archival>
-- Soroban Environment - Environment Archival: <https://soroban.stellar.org/docs/env-archival>
-- Stellar Developers - Persistent and Temporary State: <https://developers.stellar.org/docs/learn/soroban/persistent-temporary>
+- Soroban Persistent Entries: https://developers.stellar.org/docs/learn/soroban-persistent-entrier
+- Soroban State Archival: https://developers.stellar.org/docs/learn/soroban-state-archival
+- Requirements G-10, D-9, NFR-2
+- Blocked by: #780
