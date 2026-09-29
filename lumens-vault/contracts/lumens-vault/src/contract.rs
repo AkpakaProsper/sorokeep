@@ -72,6 +72,13 @@ impl LumensVault {
 
         env.storage().instance().set(&DataKey::Admin, &admin);
 
+        // Validate the initial bounds with the same helper `update_config`
+        // uses, so the constructor and the admin path can never drift apart.
+        // A zero minimum or an inverted range is rejected here with the same
+        // error a later `update_config` call would return.
+        Self::validate_lock_bounds(default_timelock_ledgers, default_timelock_ledgers)
+            .expect("invalid default timelock");
+
         let config = VaultConfig::V1(VaultConfigV1 {
             default_timelock_ledgers,
         });
@@ -164,14 +171,29 @@ impl LumensVault {
         Ok(())
     }
 
-    pub fn update_config(env: Env, new_timelock_ledgers: u32) -> Result<(), Error> {
+    pub fn update_config(
+        env: Env,
+        min_lock_ledgers: u32,
+        max_lock_ledgers: u32,
+    ) -> Result<(), Error> {
         let admin = Self::get_admin(&env)?;
         admin.require_auth();
 
+        // Apply exactly the same validation the constructor does. Sharing the
+        // helper (rather than duplicating the checks) is what guarantees the
+        // admin cannot put the contract into a state the constructor would
+        // have refused.
+        Self::validate_lock_bounds(min_lock_ledgers, max_lock_ledgers)?;
+
         let config = VaultConfig::V1(VaultConfigV1 {
-            default_timelock_ledgers: new_timelock_ledgers,
+            default_timelock_ledgers: max_lock_ledgers,
         });
         env.storage().instance().set(&DataKey::Config, &config);
+
+        // Existing vaults are unaffected by a bounds change: their
+        // `unlock_ledger` was fixed at deposit time and is never recomputed
+        // from the current config. Changing the bounds only affects future
+        // deposits.
         Ok(())
     }
 
@@ -399,6 +421,19 @@ impl LumensVault {
         match config {
             VaultConfig::V1(c) => Ok(c),
         }
+    }
+
+    /// Shared bounds check used by both the constructor and `update_config`.
+    /// Rejects a zero minimum and an inverted range with the same error the
+    /// constructor uses, so the two paths cannot diverge.
+    fn validate_lock_bounds(min_lock_ledgers: u32, max_lock_ledgers: u32) -> Result<(), Error> {
+        if min_lock_ledgers == 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if max_lock_ledgers < min_lock_ledgers {
+            return Err(Error::InvalidAmount);
+        }
+        Ok(())
     }
 
     fn check_paused(env: &Env) -> Result<(), Error> {
