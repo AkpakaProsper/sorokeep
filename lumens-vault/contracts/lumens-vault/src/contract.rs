@@ -23,7 +23,6 @@ use crate::storage::{
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
-    NotInitialized = 1,
     Paused = 2,
     AssetNotWhitelisted = 3,
     InsufficientBalance = 4,
@@ -358,7 +357,7 @@ impl LumensVault {
             .storage()
             .instance()
             .get(&DataKey::State)
-            .ok_or(Error::NotInitialized)?;
+            .ok_or(Error::VaultNotFound)?;
         match state {
             VaultState::V1(s) => Ok(s.is_paused),
         }
@@ -375,7 +374,7 @@ impl LumensVault {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)
+            .ok_or(Error::VaultNotFound)
     }
 
     // --- Internal helpers ---
@@ -387,7 +386,7 @@ impl LumensVault {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)
+            .ok_or(Error::VaultNotFound)
     }
 
     fn get_config(env: &Env) -> Result<VaultConfigV1, Error> {
@@ -395,7 +394,7 @@ impl LumensVault {
             .storage()
             .instance()
             .get(&DataKey::Config)
-            .ok_or(Error::NotInitialized)?;
+            .ok_or(Error::VaultNotFound)?;
         match config {
             VaultConfig::V1(c) => Ok(c),
         }
@@ -409,7 +408,7 @@ impl LumensVault {
             .storage()
             .instance()
             .get(&DataKey::State)
-            .ok_or(Error::NotInitialized)?;
+            .ok_or(Error::VaultNotFound)?;
         match state {
             VaultState::V1(s) => {
                 if s.is_paused {
