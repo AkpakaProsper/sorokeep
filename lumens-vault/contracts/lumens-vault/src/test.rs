@@ -7,6 +7,7 @@ use soroban_sdk::{
     Address, BytesN, Env,
 };
 
+use crate::contract::Error;
 use crate::storage::DataKey;
 use crate::{LumensVault, LumensVaultClient};
 
@@ -165,6 +166,203 @@ fn test_user_vault_count_ttl_is_extended_on_deposit() {
         ttl_after_second_deposit > 1000,
         "UserVaultCount TTL was not refreshed on the second deposit — it would archive soon"
     );
+}
+
+// ---------------------------------------------------------------------
+// E05-06 — Pause semantics (FR-5, FR-10, NFR-2).
+//
+// FR-5 has two halves and both are pinned here:
+//
+//   1. While paused, deposits and withdrawals are rejected with
+//      Error::Paused — even a matured vault cannot be drained, so an
+//      admin cannot use a pause to move funds out.
+//   2. Pause is a circuit breaker, not a timelock override. It must
+//      never change any vault's unlock_ledger, so it can never be a
+//      backdoor to early access, and it must never lock funds
+//      permanently either — after unpause every vault is exactly where
+//      it was, on its original schedule.
+//
+// Authorization of pause/unpause itself is out of scope (E04-03).
+// ---------------------------------------------------------------------
+
+#[test]
+fn test_deposit_fails_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    vault_client.pause();
+    assert!(vault_client.is_paused());
+
+    let res = vault_client.try_deposit(&user, &token_client.address, &100);
+    assert_eq!(res, Err(Ok(Error::Paused)));
+
+    // The rejected deposit changed nothing: no tokens left the user, the
+    // contract holds nothing, and no vault was created.
+    assert_eq!(token_client.balance(&user), 1000);
+    assert_eq!(token_client.balance(&vault_client.address), 0);
+    assert_eq!(vault_client.get_user_vault_count(&user), 0);
+}
+
+#[test]
+fn test_withdraw_of_matured_vault_fails_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    vault_client.deposit(&user, &token_client.address, &500);
+
+    // Mature the vault: land exactly on unlock_ledger (the inclusive
+    // boundary pinned by E05-11), so the timelock alone would allow the
+    // withdrawal.
+    let unlock_ledger = vault_client
+        .get_vault(&user, &token_client.address, &1)
+        .unlock_ledger;
+    env.ledger()
+        .with_mut(|l| l.sequence_number = unlock_ledger);
+
+    vault_client.pause();
+
+    // Paused wins even over a matured vault. This is the half of FR-5
+    // that matters for user trust: a pause must not become a drain tool.
+    let res = vault_client.try_withdraw(&user, &token_client.address, &1, &100);
+    assert_eq!(res, Err(Ok(Error::Paused)));
+
+    // The failed attempt changed nothing — balance neither dropped nor
+    // was inflated.
+    let entry = vault_client.get_vault(&user, &token_client.address, &1);
+    assert_eq!(entry.amount, 500);
+    assert_eq!(entry.unlock_ledger, unlock_ledger);
+    assert_eq!(token_client.balance(&user), 500);
+    assert_eq!(token_client.balance(&vault_client.address), 500);
+}
+
+#[test]
+fn test_deposit_and_withdraw_succeed_after_unpause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    vault_client.pause();
+    vault_client.unpause();
+    assert!(!vault_client.is_paused());
+
+    // Both operations work again after unpause — a pause must never lock
+    // funds permanently.
+    let returned_vault_id = vault_client.deposit(&user, &token_client.address, &100);
+    assert_eq!(returned_vault_id, 1);
+
+    let unlock_ledger = vault_client
+        .get_vault(&user, &token_client.address, &1)
+        .unlock_ledger;
+    env.ledger()
+        .with_mut(|l| l.sequence_number = unlock_ledger);
+
+    vault_client.withdraw(&user, &token_client.address, &1, &100);
+    assert_eq!(token_client.balance(&user), 1000);
+    assert_eq!(token_client.balance(&vault_client.address), 0);
+}
+
+#[test]
+fn test_pause_does_not_change_any_vaults_unlock_ledger() {
+    // The load-bearing half of FR-5: pause must never be a backdoor to
+    // early access. The unlock_ledger recorded at deposit time is the
+    // only thing that gates a withdrawal, so a pause/unpause cycle must
+    // leave it unchanged for every vault — not just one.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    // Two vaults for the same user, deposited at different ledger
+    // sequences so their unlock_ledgers differ.
+    vault_client.deposit(&user, &token_client.address, &100);
+    env.ledger().with_mut(|l| l.sequence_number += 5);
+    vault_client.deposit(&user, &token_client.address, &50);
+
+    let unlock_ledger_vault_1 = vault_client
+        .get_vault(&user, &token_client.address, &1)
+        .unlock_ledger;
+    let unlock_ledger_vault_2 = vault_client
+        .get_vault(&user, &token_client.address, &2)
+        .unlock_ledger;
+    assert_ne!(unlock_ledger_vault_1, unlock_ledger_vault_2);
+
+    // A full pause/unpause cycle must not move either unlock_ledger.
+    vault_client.pause();
+    assert_eq!(
+        vault_client
+            .get_vault(&user, &token_client.address, &1)
+            .unlock_ledger,
+        unlock_ledger_vault_1
+    );
+    assert_eq!(
+        vault_client
+            .get_vault(&user, &token_client.address, &2)
+            .unlock_ledger,
+        unlock_ledger_vault_2
+    );
+
+    vault_client.unpause();
+    assert_eq!(
+        vault_client
+            .get_vault(&user, &token_client.address, &1)
+            .unlock_ledger,
+        unlock_ledger_vault_1
+    );
+    assert_eq!(
+        vault_client
+            .get_vault(&user, &token_client.address, &2)
+            .unlock_ledger,
+        unlock_ledger_vault_2
+    );
+
+    // And the original schedule still governs access, unchanged by the
+    // pause: vault 1 is at its unlock_ledger and pays out, vault 2 is
+    // not and is still rejected with TimelockNotExpired.
+    env.ledger()
+        .with_mut(|l| l.sequence_number = unlock_ledger_vault_1);
+    vault_client.withdraw(&user, &token_client.address, &1, &100);
+
+    let res = vault_client.try_withdraw(&user, &token_client.address, &2, &50);
+    assert_eq!(res, Err(Ok(Error::TimelockNotExpired)));
+
+    let entry = vault_client.get_vault(&user, &token_client.address, &2);
+    assert_eq!(entry.amount, 50);
+    assert_eq!(entry.unlock_ledger, unlock_ledger_vault_2);
+    assert_eq!(token_client.balance(&user), 950);
+    assert_eq!(token_client.balance(&vault_client.address), 50);
 }
 
 // ---------------------------------------------------------------------
