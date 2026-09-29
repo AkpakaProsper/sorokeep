@@ -30,6 +30,7 @@ pub enum Error {
     TimelockNotExpired = 5,
     VaultNotFound = 6,
     InvalidAmount = 7,
+    InvalidLockPeriod = 8,
 }
 
 const DAY_IN_LEDGERS: u32 = 17280; // 86,400s / 5s-per-ledger
@@ -228,7 +229,11 @@ impl LumensVault {
         );
 
         let config = Self::get_config(&env)?;
-        let unlock_ledger = env.ledger().sequence() + config.default_timelock_ledgers;
+        let unlock_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(config.default_timelock_ledgers)
+            .ok_or(Error::InvalidLockPeriod)?;
 
         let vault_entry = VaultEntry::V1(VaultEntryV1 {
             amount,
