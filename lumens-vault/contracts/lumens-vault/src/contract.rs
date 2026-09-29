@@ -304,9 +304,10 @@ impl LumensVault {
 
         entry_v1.amount -= amount;
         if entry_v1.amount == 0 {
-            // E03-01 decided: a zero-balance vault is removed rather than
-            // kept as a zero-amount entry. UserVaultCount is deliberately
-            // untouched so the next deposit still gets a fresh id.
+            // Zero-balance vaults are removed rather than persisted as a
+            // zero-amount entry. UserVaultCount is deliberately left alone:
+            // it is a monotonic id allocator, not a count of live vaults, so
+            // the next deposit still receives a fresh id.
             env.storage().persistent().remove(&vault_key);
         } else {
             env.storage()
