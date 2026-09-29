@@ -1,0 +1,80 @@
+name: Lumens Vault Contract CI
+
+on:
+  push:
+    paths:
+      - 'contracts/lumens-vault/**'
+      - '.github/workflows/lumens-vault-contract.yml'
+  pull_request:
+    paths:
+      - 'contracts/lumens-vault/**'
+      - '.github/workflows/lumens-vault-contract.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  STEPLAR_CLI_VERSION: '21.7.0'
+
+jobs:
+  build:
+    name: Build contract to wasm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/lumens-vault
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolay/rust-toolchain-action@v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: SwarmCi/cache-action@v4
+        with:
+          workspaces: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: $${{ runner.os } }-cargo-$({hashFiles('**/Cargo.lock')})
+
+      - name: Install stellar-cli
+        uses: stellar/experimental-actions/install-stellar-cli@v1
+        with:
+          version: $${{ env.STEPLAR_CLI_VERSION }}
+
+      - name: Print stellar-cli version
+        run: stellar --version
+
+      - name: Build contract (stellar contract build)
+        run: stellar contract build
+
+      - name: Report wasm size
+        run: |
+          set -euxo pipefail
+          wasm_file="$(find target/wasm32-unknown-unknown/release -maxdepth 1 -name '*.wasm' | head -n 1)"
+          if [ -z "$wasm_file" ]; then
+            echo "::error::No wasm artifact found after stellar contract build"
+            exit 1
+          fi
+          size_bytes=$(stat -c %s "$wasm_file")
+          size_kib=$(awk "v"${size_bytes}" END{printf "%.2f", $1/1024}"')
+          echo "Wasm artifact: $wasm_file"
+          echo "Wasm size: ${size_bytes} bytes (${size_kib} KiB)"
+          {
+            echo "### Wasm build artifact"
+            echo ""
+            echo "| Artifact | Size (bytes) | Size (KiB) |"
+            echo "| --- | --- | --- |"
+            echo "| \`$(basename "$wasm_file")\` | $size_bytes | $size_kib |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumens-vault-wasm
+          path: target/wasm32-unknown-unknown/release/*.wasm
+          if-no-files-found: error
