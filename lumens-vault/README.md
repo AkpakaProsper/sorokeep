@@ -87,12 +87,16 @@ Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. Two rules matter more than the 
    upgrade behaviour gets run more than once.
 2. **Verify against primary sources.** Soroban SDK behaviour, Sorokeep's CLI flags and
    third-party contract interfaces have each been stated incorrectly here at some point.
-   Where an issue asks you to check something, it is because a previous version of that claim
-   was wrong.
+Where an issue asks you to check something, it is because a previous version of that claim
+was wrong.
 
 Work is tracked as issues in the `sorokeep` repository under the `lumens-vault` label. The
 backlog is generated — see [`docs/backlog/`](docs/backlog/) for the requirements register,
 the epics, and the coverage matrix proving every requirement maps to at least one issue.
+
+## License
+
+Lumens Vault is licensed under the [MIT License](LICENSE).
 
 ## Relationship to Sorokeep
 
