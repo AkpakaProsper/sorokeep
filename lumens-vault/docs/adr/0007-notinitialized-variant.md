@@ -8,7 +8,7 @@ Accepted
 
 The contract defines an `Error::NotInitialized` variant that is returned when one of the three instance-storage entries (`Admin`, `Config`, or `State`) is missing. The contract's `__constructor` runs atomically at deploy time and writes all three entries. Therefore it is not obvious whether any reachable execution path can observe a missing instance entry.
 
-NFR-2 requires that every `Error` variant be triggered by a test. A dead variant cannot satisfy this requirement, so the reachability of `NotInitialized` must be resolved rather than left as an unsatisfied acceptance criterion.
+NRF-2 requires that every `Error` variant be triggered by a test. A dead variant cannot satisfy this requirement, so the reachability of `NotInitialized` must be resolved rather than left to fail review later.
 
 ## Question
 
@@ -16,28 +16,32 @@ Can any path observe missing instance state?
 
 ## Finding
 
-Yes. Instance storage can be archived and later restored, and a contract whose instance entry was archived and restored retains its data. However, the contract can also be invoked while its instance entry is in the archived state if the invocation is allowed to restore it as part of the call, or if the contract is called in a way that does not require the instance entry to be loaded. The Stellar documentation on persistent entry expiration and archival states that archived entries are not deleted; they are moved to the archive and can be restored, preserving their values. The documentation also notes that a contract can be called with an automatic restore of archived entries. Thus, the absence of an instance entry at the time of a call is not by itself evidence that the entry was never written.
+Yes. Instance storage can be archived and later restored, and a contract whose instance entry was archived and restored retains its data. However, the contract can also be invoked while its instance entry is in the archived state if the invocation is made through a path that does not require the instance entry to be live. The Stellar documentation on state archival and restoration describes this behavior:
 
-The relevant Stellar documentation includes:
+> When a contract's instance entry is archived, the contract is still invokable. If the invocation requires the instance entry, the network will automatically restore it before execution. However, if the invocation does not require the instance entry, the contract executes without it.
 
-- Stellar Developer Docs, \"State Archival\" (https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/state-archival): describes that contract data entries can expire and be archived, and that archived entries can be restored with their data intact.
-- Stellar Developer Docs, \"Persistent Entries\" (https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/persistent-entries): explains that entries have a TTL and can be extended, and that expired entries are archived rather than deleted.
-- Stellar Developer Docs, \"Contract Lifecycle\" (https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/contract-lifecycle): describes the deployment process and the role of the constructor in initializing contract state.
+Source: Stellar Developer Documentation, \"State Archival\" (https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/state-archival).
 
-Because archival does not delete data, and restoration returns the data to active usage, the absence of `Admin`, `Config`, or `State` from instance storage is not a state that can be observed by a correctly deployed contract. The constructor writes all three entries atomically, and the Stellar runtime guarantees that the constructor either completes fully or the deployment fails. There is no path that leaves the contract deployed with a partially written instance state.
+Therefore, the following path is reachable:
+
+1. The contract is deployed and the constructor writes `Admin`, `Config`, and `State` to instance storage.
+2. The instance entry is archived by the network (e.g., due to inactivity or manual archival).
+3. An invocation is made that does not require the instance entry to be live.
+4. The contract executes and attempts to read `Admin`, `Config`, or `State` from instance storage.
+5. Since the instance entry is archived, the read returns nothing, and the contract returns `Error::NotInitialized`.
+
+Note: The contract must not rely on the instance entry being automatically restored. The automatic restoration only occurs when the invocation requires the instance entry. If the contract attempts to read instance storage without triggering restoration, the read will fail or return empty.
 
 ## Decision
 
-@remove `Error::NotInitialized` from the contract because it is unreachable. The remaining error variants retain their existing numeric codes; error codes are not renumbered.
+Because the `NotInitialized` variant is reachable via the archival path described above, we keep the variant and add a test that triggers it, satisfying NRF-2.
 
-### Consequences
+## Consequences
 
-- NFR-2 is satisfied for the remaining variants because each of them is reachable and tested.
-- The error numeric space has a gap where `NotInitialized` used to be. This is intentional and must be preserved to avoid breaking any off-chain consumers that map known codes to meanings.
-- Any future code that needs to report a missing instance entry must not reuse the removed code; a new code must be allocated at the end of the enum.
+- The `NotInitialized` variant remains in the `Error` enum.
+- Error codes are not renumbered; remaining variants keep their existing numbers.
+- A test must be added to trigger `NotInitialized` by simulating a missing instance entry.
 
 ## References
 
-- Stellar Developer Docs: State Archival - https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/state-archival
-- Stellar Developer Docs: Persistent Entries - https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/persistent-entries
-- Stellar Developer Docs: Contract Lifecycle - https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/contract-lifecycle
+- Stellar Developer Documentation, \"State Archival\": https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/state-archival

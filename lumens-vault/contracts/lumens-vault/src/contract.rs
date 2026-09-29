@@ -357,7 +357,7 @@ impl LumensVault {
             .storage()
             .instance()
             .get(&DataKey::State)
-            .ok_or(Error::VaultNotFound)?;
+            .ok_or(Error::Paused)?;
         match state {
             VaultState::V1(s) => Ok(s.is_paused),
         }
@@ -374,7 +374,7 @@ impl LumensVault {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::VaultNotFound)
+            .ok_or(Error::Paused)
     }
 
     // --- Internal helpers ---
@@ -386,7 +386,7 @@ impl LumensVault {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::VaultNotFound)
+            .ok_or(Error::Paused)
     }
 
     fn get_config(env: &Env) -> Result<VaultConfigV1, Error> {
@@ -394,7 +394,7 @@ impl LumensVault {
             .storage()
             .instance()
             .get(&DataKey::Config)
-            .ok_or(Error::VaultNotFound)?;
+            .ok_or(Error::Paused)?;
         match config {
             VaultConfig::V1(c) => Ok(c),
         }
@@ -408,7 +408,7 @@ impl LumensVault {
             .storage()
             .instance()
             .get(&DataKey::State)
-            .ok_or(Error::VaultNotFound)?;
+            .ok_or(Error::Paused)?;
         match state {
             VaultState::V1(s) => {
                 if s.is_paused {
