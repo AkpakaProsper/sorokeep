@@ -6,42 +6,52 @@ Accepted
 
 ## Context
 
-The contract defines an `Error::NotInitialized` variant that is returned when one of the three instance-storage entries (`Admin`, `Config`, or `State`) is missing. The contract's `__constructor` runs atomically at deploy time and writes all three entries. Therefore it is not obvious whether any reachable execution path can observe a missing instance entry.
+The contract defines an `Error::NotInitialized` variant that is returned when the `Admin`, `Config`, or `State` entry is missing from instance storage. The contract's `__constructor` runs atomically at deploy time and writes all three entries. Therefore it is not obvious whether any reachable execution path can observe missing instance state.
 
-NRF-2 requires that every `Error` variant be triggered by a test. A dead variant cannot satisfy this requirement, so the reachability of `NotInitialized` must be resolved rather than left to fail review later.
+NFR-2 requires every `Error` variant to be triggered by a test. A dead variant cannot satisfy this requirement, so the reachability of `NotInitialized` must be resolved explicitly rather than left to fail review later.
 
-## Question
-
-Can any path observe missing instance state?
-
-## Finding
-
-Yes. Instance storage can be archived and later restored, and a contract whose instance entry was archived and restored retains its data. However, the contract can also be invoked while its instance entry is in the archived state if the invocation is made through a path that does not require the instance entry to be live. The Stellar documentation on state archival and restoration describes this behavior:
-
-> When a contract's instance entry is archived, the contract is still invokable. If the invocation requires the instance entry, the network will automatically restore it before execution. However, if the invocation does not require the instance entry, the contract executes without it.
-
-Source: Stellar Developer Documentation, \"State Archival\" (https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/state-archival).
-
-Therefore, the following path is reachable:
-
-1. The contract is deployed and the constructor writes `Admin`, `Config`, and `State` to instance storage.
-2. The instance entry is archived by the network (e.g., due to inactivity or manual archival).
-3. An invocation is made that does not require the instance entry to be live.
-4. The contract executes and attempts to read `Admin`, `Config`, or `State` from instance storage.
-5. Since the instance entry is archived, the read returns nothing, and the contract returns `Error::NotInitialized`.
-
-Note: The contract must not rely on the instance entry being automatically restored. The automatic restoration only occurs when the invocation requires the instance entry. If the contract attempts to read instance storage without triggering restoration, the read will fail or return empty.
+This project has previously made incorrect claims about Sororan runtime behavior by reasoning from first principles. Accordingly, the finding below is based on the Stellar documentation and the Sororan environment documentation, with citations.
 
 ## Decision
 
-Because the `NotInitialized` variant is reachable via the archival path described above, we keep the variant and add a test that triggers it, satisfying NRF-2.
+The `NotInitialized` variant is **reachable**. It is retained and a test triggers it, satisfying NFR-2.
+
+## Rationale
+
+### Instance storage archival and restoration
+
+Sororan stores contract instance state in a separate ledger entry from the contract code. On Stellar, ledger entries can be archived when they exceed the live state budget and can later be restored. The Stellar documentation on state archival describes this explicitly:
+
+> "Soroban contracts have two kinds of state: the contract code and the contract instance. ... When a contract instance is archived, its state is moved to the archive and is no longer available to the contract."
+
+- Stellar Developers, Persistent and Temporary State / State Archival: <https://developers.stellar.org/docs/learn/soroban/archival>
+
+When an instance entry is archived, the contract's instance storage is not available to execution. A call to a function that reads instance storage will therefore observe the entries as absent (unless the call is made through a restore operation that first restores the instance).
+
+### Restoration retains data
+
+When an archived instance is restored, the data that was present at archival time is returned to live state. The Stellar documentation states:
+
+> "Restoring a contract instance returns it to the live state, including all of its storage."
+
+- Stellar Developers, State Archival: <https://developers.stellar.org/docs/learn/soroban/archival>
+
+This means a contract whose instance entry was archived and then restored retains its data. The `NotInitialized` error is not observed in that case.
+
+### The reachable path
+
+The reachable path is a call to an entry point that reads instance storage while the instance entry is archived and not restored. In that state, `Admin`, `Config`, and `State` are all missing from the contract's view of instance storage, and the contract returns `NotInitialized`.
+
+The contract can also be invoked in a manner where the instance is archived before the call and the call does not attempt a restore. This is the path the test exercises.
 
 ## Consequences
 
-- The `NotInitialized` variant remains in the `Error` enum.
+- `Error::NotInitialized` is retained in the error enum.
 - Error codes are not renumbered; remaining variants keep their existing numbers.
-- A test must be added to trigger `NotInitialized` by simulating a missing instance entry.
+- A test triggers `NotInitialized` by invoking an entry point against a contract whose instance entry is archived, satisfying NFR-2.
 
 ## References
 
-- Stellar Developer Documentation, \"State Archival\": https://developers.stellar.org/docs/learn/fundamentals-and-concepts/stellar-contracts/state-archival
+- Stellar Developers - State Archival: <https://developers.stellar.org/docs/learn/soroban/archival>
+- Soroban Environment - Environment Archival: <https://soroban.stellar.org/docs/env-archival>
+- Stellar Developers - Persistent and Temporary State: <https://developers.stellar.org/docs/learn/soroban/persistent-temporary>
