@@ -28,8 +28,7 @@ fn create_token_contract<'a>(env: &Env, admin: &Address) -> (TokenClient<'a>, St
     )
 }
 
-/// `env.register` now takes constructor args directly, since `initialize`
-/// was replaced by `__constructor` (see contract.rs change log item 1).
+/// `env.register` passes constructor arguments directly to `__constructor`.
 fn setup(env: &Env, admin: &Address, default_timelock_ledgers: u32) -> LumensVaultClient<'static> {
     let vault_id = env.register(LumensVault, (admin, default_timelock_ledgers));
     LumensVaultClient::new(env, &vault_id)
@@ -68,15 +67,14 @@ fn test_deposit_and_withdraw() {
     assert_eq!(token_client.balance(&user), 950);
     assert_eq!(token_client.balance(&vault_client.address), 50);
 
-    // New: the view function this pass added actually reflects the state.
+    // The view reflects the remaining vault state after a partial withdrawal.
     let entry = vault_client.get_vault(&user, &token_client.address, &1);
     assert_eq!(entry.amount, 50);
 }
 
 #[test]
 fn test_deposit_rejects_non_positive_amount() {
-    // NEW — covers the fix in contract.rs change log item 2. Before this
-    // fix, neither of these guarded at all.
+    // Deposits reject zero and negative amounts before any token transfer.
     let env = Env::default();
     env.mock_all_auths();
 
@@ -98,11 +96,9 @@ fn test_deposit_rejects_non_positive_amount() {
 
 #[test]
 fn test_withdraw_rejects_non_positive_amount() {
-    // NEW — this is the more important half of the fix: without the guard,
-    // a negative `amount` here would have skipped the insufficient-balance
-    // check and *inflated* the caller's recorded balance via
-    // `entry_v1.amount -= amount`. See contract.rs change log item 2 for
-    // the full walkthrough.
+    // Withdrawals reject non-positive amounts before mutating the recorded
+    // balance; otherwise a negative amount could inflate `entry_v1.amount`
+    // through `entry_v1.amount -= amount`.
     let env = Env::default();
     env.mock_all_auths();
 
@@ -128,10 +124,9 @@ fn test_withdraw_rejects_non_positive_amount() {
 
 #[test]
 fn test_user_vault_count_ttl_is_extended_on_deposit() {
-    // NEW — covers contract.rs change log item 3. Before this fix,
-    // `UserVaultCount` was written once on a user's first deposit and never
-    // touched again, so it would archive on its own default schedule
-    // regardless of how active the user was — silently blocking every
+    // The user vault counter is refreshed on each deposit. Without this,
+    // `UserVaultCount` would archive on its default schedule regardless of
+    // how active the user was — silently blocking every
     // future deposit from that user once it did.
     let env = Env::default();
     env.mock_all_auths();
