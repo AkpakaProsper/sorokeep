@@ -245,3 +245,101 @@ fn test_real_upgrade_and_state_migration() {
     // round-trip, actually happened.
     assert!(migrated.last_touched_ledger > 0);
 }
+
+// ---------------------------------------------------------------------
+// Withdraw ordering (#837 / E05-15).
+//
+// DELIBERATE ORDERING: `withdraw` writes the decremented vault balance to
+// storage BEFORE it calls `transfer` to move tokens out. This is not
+// incidental. Recording state first means the stored balance never lags
+// behind tokens that have already left the vault. Do not reorder these
+// two steps.
+//
+// The tests below pin the observable consequence: stored balance and token
+// balances stay mutually consistent on success, and a rejected withdrawal
+// (timelock, insufficient balance) moves no tokens and changes no balance.
+// ---------------------------------------------------------------------
+
+#[test]
+fn test_withdraw_success_keeps_stored_and_token_balances_consistent() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    vault_client.deposit(&user, &token_client.address, &500);
+    env.ledger().with_mut(|l| l.sequence_number += 11);
+
+    vault_client.withdraw(&user, &token_client.address, &1, &200);
+
+    let entry = vault_client.get_vault(&user, &token_client.address, &1);
+    let user_bal = token_client.balance(&user);
+    let vault_bal = token_client.balance(&vault_client.address);
+
+    assert_eq!(entry.amount, 300);
+    // Stored balance matches what the vault actually holds.
+    assert_eq!(vault_bal, entry.amount);
+    assert_eq!(user_bal, 700);
+    // No tokens created or destroyed.
+    assert_eq!(user_bal + vault_bal, 1000);
+}
+
+#[test]
+fn test_withdraw_timelock_failure_moves_no_tokens_and_changes_no_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    vault_client.deposit(&user, &token_client.address, &500);
+
+    // Timelock (10 ledgers) has not elapsed.
+    let res = vault_client.try_withdraw(&user, &token_client.address, &1, &200);
+    assert!(res.is_err());
+
+    let entry = vault_client.get_vault(&user, &token_client.address, &1);
+    assert_eq!(entry.amount, 500);
+    assert_eq!(token_client.balance(&user), 500);
+    assert_eq!(token_client.balance(&vault_client.address), 500);
+}
+
+#[test]
+fn test_withdraw_insufficient_balance_moves_no_tokens_and_changes_no_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    vault_client.add_asset(&token_client.address);
+
+    vault_client.deposit(&user, &token_client.address, &500);
+    env.ledger().with_mut(|l| l.sequence_number += 11);
+
+    // Timelock has elapsed, but the request exceeds the deposited balance.
+    let res = vault_client.try_withdraw(&user, &token_client.address, &1, &600);
+    assert!(res.is_err());
+
+    let entry = vault_client.get_vault(&user, &token_client.address, &1);
+    assert_eq!(entry.amount, 500);
+    assert_eq!(token_client.balance(&user), 500);
+    assert_eq!(token_client.balance(&vault_client.address), 500);
+}
