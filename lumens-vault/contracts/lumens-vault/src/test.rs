@@ -168,6 +168,78 @@ fn test_user_vault_count_ttl_is_extended_on_deposit() {
 }
 
 // ---------------------------------------------------------------------
+// FR-9 regression guard — atomic constructor
+//
+// FR-9 replaced a two-step deploy+initialize flow with a single `__constructor`
+// that runs atomically during deployment. The critical property is that the
+// contract can never exist in a state where it has no admin: there is no window
+// between "contract deployed" and "admin assigned" that a front-runner could
+// exploit by calling `initialize` first and claiming the admin role.
+//
+// This test pins that property. If a future refactor reintroduces a separate
+// `initialize` entry point — even one protected by `require_auth` — it would
+// reopen the front-running window and be a CRITICAL regression. This test does
+// not cover that deploy-time authorization scenario (that is E06-04's concern);
+// it covers the atomicity invariant: all three instance storage keys (Admin,
+// State, Config) are present and correct immediately after registration, before
+// any other call has been made.
+#[test]
+fn test_constructor_writes_all_instance_keys_atomically() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let timelock_ledgers: u32 = 42;
+
+    // Register the contract with constructor args. No other call has been made
+    // yet — in particular, no deposit exists. This is the state we are testing.
+    let vault_client = setup(&env, &admin, timelock_ledgers);
+
+    // 1. Admin key: get_admin_address must return the exact address passed to
+    //    the constructor, with no separate initializer call required.
+    let stored_admin = vault_client.get_admin_address();
+    assert_eq!(
+        stored_admin, admin,
+        "get_admin_address should return the constructor-supplied admin immediately after deployment"
+    );
+
+    // 2. State key: is_paused must be false — the contract is live the moment
+    //    it is deployed, not in an uninitialized limbo where is_paused could
+    //    panic or return an unexpected value.
+    let paused = vault_client.is_paused();
+    assert!(
+        !paused,
+        "is_paused should be false immediately after deployment with no deposits"
+    );
+
+    // 3. Config key: the default_timelock_ledgers written by the constructor
+    //    must be visible without any additional setup call. We verify this
+    //    indirectly via deposit: the vault's unlock_ledger is computed as
+    //    `sequence + default_timelock_ledgers`, so if the config key was
+    //    missing or wrong the math would be off.
+    //
+    //    We set up the minimum required scaffolding (one whitelisted asset,
+    //    one minted balance) but make no assertion about the deposit itself —
+    //    the only thing being checked here is that the timelock comes from the
+    //    constructor value, proving Config was written atomically.
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&admin, &1);
+    vault_client.add_asset(&token_client.address);
+
+    let start_ledger = env.ledger().sequence();
+    let vault_id = vault_client.deposit(&admin, &token_client.address, &1);
+
+    let entry = vault_client.get_vault(&admin, &token_client.address, &vault_id);
+    assert_eq!(
+        entry.unlock_ledger,
+        start_ledger + timelock_ledgers,
+        "unlock_ledger should equal start_ledger + constructor timelock, \
+         proving Config was written atomically by __constructor"
+    );
+}
+
+// ---------------------------------------------------------------------
 // The real upgrade test.
 //
 // This is a genuine cross-binary upgrade test, and the distinction matters:
