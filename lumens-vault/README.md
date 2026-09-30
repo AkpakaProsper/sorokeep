@@ -43,10 +43,9 @@ and built out by the backlog's E07 onwards.
 
 ## Requirements
 
-- **Rust 1.85 or later.** `soroban-sdk` 28's dependency tree needs `edition2024`; an older
-  toolchain fails on a transitive dependency before reaching this project's own code.
-- The **`wasm32v1-none`** target — the only target the Soroban runtime supports.
-- **`stellar-cli`**, reasonably current.
+- [Rust 1.85 or later.](https://www.rust-lang.org/tools/install)
+- The `wasm32v1-none` target — the only target the Soroban runtime supports.
+- [`stellar-cli` `23.1.0`](https://github.com/stellar/stellar-cli)
 
 ```powershell
 rustup target add wasm32v1-none
@@ -56,7 +55,7 @@ rustup target add wasm32v1-none
 
 The upgrade test imports the v2 fixture's compiled wasm via `contractimport!`, which resolves
 at **compile** time. The fixture must therefore be built before the main crate's tests, or
-`cargo test` fails on a missing file:
+cargo test` fails on a missing file:
 
 ```powershell
 cd contracts\lumens-vault-v2-fixture
