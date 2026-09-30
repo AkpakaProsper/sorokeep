@@ -167,6 +167,42 @@ fn test_user_vault_count_ttl_is_extended_on_deposit() {
     );
 }
 
+#[test]
+fn test_delisting_blocks_deposits_but_never_traps_existing_funds() {
+    // FR-11: An earlier version of this contract had the whitelist check on
+    // withdraw as well as deposit, which would have permanently trapped user
+    // funds the moment an admin delisted an asset. The fix was to omit the
+    // check on withdraw. This test is a permanent regression guard.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    token_asset.mint(&user, &1000);
+    
+    // Deposit while whitelisted
+    vault_client.add_asset(&token_client.address);
+    vault_client.deposit(&user, &token_client.address, &500);
+
+    // Delist the asset
+    vault_client.remove_asset(&token_client.address);
+
+    // Assert a new deposit of the delisted asset fails with AssetNotWhitelisted
+    let res = vault_client.try_deposit(&user, &token_client.address, &100);
+    assert_eq!(res, Err(Ok(crate::contract::Error::AssetNotWhitelisted)));
+
+    // Mature the lock
+    env.ledger().with_mut(|l| l.sequence_number += 11);
+
+    // Withdraw successfully
+    vault_client.withdraw(&user, &token_client.address, &1, &500);
+    assert_eq!(token_client.balance(&user), 1000);
+}
+
 // ---------------------------------------------------------------------
 // The real upgrade test.
 //
