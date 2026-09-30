@@ -140,9 +140,19 @@ impl LumensVault {
         let admin = Self::get_admin(&env)?;
         admin.require_auth();
 
+        // E03-03's storage decision: delisting removes the whitelist entry
+        // entirely rather than writing `false`. `is_whitelisted` and
+        // `check_whitelisted` both treat a missing entry as not-whitelisted
+        // (they `unwrap_or(false)`), so behaviour is identical either way,
+        // but removing the entry reclaims the instance-storage slot instead
+        // of leaving a permanent tombstone that still costs rent forever.
+        //
+        // Existing balances are unaffected: `withdraw` deliberately does not
+        // call `check_whitelisted`, so funds deposited while the asset was
+        // valid remain withdrawable after delisting (FR-11).
         env.storage()
             .instance()
-            .set(&DataKey::AssetWhitelist(asset.clone()), &false);
+            .remove(&DataKey::AssetWhitelist(asset.clone()));
         DelistEvent {
             admin: admin.clone(),
             asset: asset.clone(),
