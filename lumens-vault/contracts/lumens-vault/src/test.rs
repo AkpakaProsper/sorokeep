@@ -39,6 +39,7 @@ fn setup(env: &Env, admin: &Address, default_timelock_ledgers: u32) -> LumensVau
 #[test]
 fn test_deposit_and_withdraw() {
     let env = Env::default();
+    // blanket mock is fine: test is about core deposit/withdraw logic, not access control
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
@@ -79,6 +80,7 @@ fn test_deposit_rejects_non_positive_amount() {
     // NEW — covers the fix in contract.rs change log item 2. Before this
     // fix, neither of these guarded at all.
     let env = Env::default();
+    // blanket mock is fine: test is about input validation, not access control
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
@@ -105,6 +107,7 @@ fn test_withdraw_rejects_non_positive_amount() {
     // `entry_v1.amount -= amount`. See contract.rs change log item 2 for
     // the full walkthrough.
     let env = Env::default();
+    // blanket mock is fine: test is about input validation, not access control
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
@@ -135,6 +138,7 @@ fn test_user_vault_count_ttl_is_extended_on_deposit() {
     // regardless of how active the user was — silently blocking every
     // future deposit from that user once it did.
     let env = Env::default();
+    // blanket mock is fine: test is about storage TTL logic, not access control
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
@@ -435,6 +439,7 @@ fn install_new_wasm(env: &Env) -> BytesN<32> {
 #[test]
 fn test_real_upgrade_and_state_migration() {
     let env = Env::default();
+    // blanket mock is fine: test is about upgrades and migration, not access control
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.sequence_number = 1000);
 
