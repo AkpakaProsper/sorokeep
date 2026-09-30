@@ -66,7 +66,7 @@ cd ..\lumens-vault
 cargo test
 ```
 
-Expected: 5 tests, all passing.
+Expected: 8 tests, all passing.
 
 To build the contract itself to wasm:
 
