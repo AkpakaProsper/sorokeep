@@ -261,7 +261,11 @@ impl LumensVault {
         );
 
         let config = Self::get_config(&env)?;
-        let unlock_ledger = env.ledger().sequence() + config.default_timelock_ledgers;
+        let unlock_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(config.default_timelock_ledgers)
+            .ok_or(Error::InvalidLockPeriod)?;
 
         let vault_entry = VaultEntry::V1(VaultEntryV1 {
             amount,
