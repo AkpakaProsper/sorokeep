@@ -339,9 +339,17 @@ impl LumensVault {
         }
 
         entry_v1.amount -= amount;
-        env.storage()
-            .persistent()
-            .set(&vault_key, &VaultEntry::V1(entry_v1));
+        if entry_v1.amount == 0 {
+            // Zero-balance vaults are removed rather than persisted as a
+            // zero-amount entry. UserVaultCount is deliberately left alone:
+            // it is a monotonic id allocator, not a count of live vaults, so
+            // the next deposit still receives a fresh id.
+            env.storage().persistent().remove(&vault_key);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&vault_key, &VaultEntry::V1(entry_v1));
+        }
 
         let token_client = token::Client::new(&env, &asset);
         token_client.transfer(&env.current_contract_address(), &to, &amount);
