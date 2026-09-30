@@ -66,7 +66,7 @@ cd ..\lumens-vault
 cargo test
 ```
 
-Expected: 5 tests, all passing.
+Expected: 8 tests, all passing.
 
 The full walkthrough — required toolchain versions, this command sequence with its
 actual output, what the fixture-ordering failure looks like when you skip step 1, and a
