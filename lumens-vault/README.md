@@ -33,6 +33,7 @@ lumens-vault/
 ├── docs/
 │   ├── TECH_SPEC.md               what the system must do
 │   ├── SYSTEM_DESIGN.md           how the pieces are arranged
+│   ├── testing.md                 clean checkout → green contract test suite, verified
 │   └── backlog/                   the issue backlog and the requirements register
 ├── CONTRIBUTING.md
 └── README.md
@@ -66,6 +67,10 @@ cargo test
 ```
 
 Expected: 5 tests, all passing.
+
+The full walkthrough — required toolchain versions, this command sequence with its
+actual output, what the fixture-ordering failure looks like when you skip step 1, and a
+troubleshooting table — is in [`docs/testing.md`](docs/testing.md).
 
 To build the contract itself to wasm:
 

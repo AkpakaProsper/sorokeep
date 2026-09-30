@@ -57,7 +57,10 @@ You'll need:
 
 Build and test commands are in [`README.md`](README.md). Note the build order: the
 v2 fixture crate must be compiled before `cargo test`, because the upgrade test
-resolves its wasm at compile time.
+resolves its wasm at compile time. The verified step-by-step — toolchain versions,
+the exact PowerShell sequence from clean checkout to green suite, and the actual
+failure output if you skip the fixture build — is in
+[`docs/testing.md`](docs/testing.md).
 
 ## Making a PR
 
