@@ -553,6 +553,91 @@ fn test_real_upgrade_and_state_migration() {
 }
 
 // ---------------------------------------------------------------------
+// Deposit ordering (#836 / E05-14).
+//
+// DELIBERATE ORDERING: `deposit` calls `token.transfer` BEFORE writing
+// vault state to storage. If the transfer fails (insufficient balance,
+// paused token, etc.), the whole transaction reverts and no vault should
+// exist. This is the most critical ordering in the contract: a vault
+// recorded without the corresponding tokens actually arriving would be
+// the worst failure possible.
+//
+// This test pins that invariant by attempting a deposit with insufficient
+// balance and asserting that no vault state was created.
+// ---------------------------------------------------------------------
+
+#[test]
+fn test_deposit_with_insufficient_balance_creates_no_vault() {
+    // #836 / E05-14: Deposit transfers tokens before recording vault state.
+    // If the transfer fails, no vault should exist — a vault recorded
+    // without tokens arriving is the worst failure this contract could have.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (token_client, token_asset) = create_token_contract(&env, &token_admin);
+    
+    // Mint only 50 tokens, but attempt to deposit 100
+    token_asset.mint(&user, &50);
+    vault_client.add_asset(&token_client.address);
+
+    let user_balance_before = token_client.balance(&user);
+    let vault_balance_before = token_client.balance(&vault_client.address);
+    let vault_count_before = vault_client.get_user_vault_count(&user);
+
+    // This must fail because the user has insufficient balance.
+    let res = vault_client.try_deposit(&user, &token_client.address, &100);
+    assert!(res.is_err(), "Deposit with insufficient balance must fail");
+
+    // CRITICAL: After the failed deposit, no vault should exist and no
+    // state should have changed. This proves the transfer happens before
+    // state is recorded.
+    
+    // 1. User vault count unchanged
+    let vault_count_after = vault_client.get_user_vault_count(&user);
+    assert_eq!(
+        vault_count_after, vault_count_before,
+        "Vault count must not increment on failed deposit"
+    );
+
+    // 2. No vault entry exists (if one was created, this would not panic)
+    let vault_lookup = vault_client.try_get_vault(&user, &token_client.address, &1);
+    assert!(
+        vault_lookup.is_err(),
+        "No vault entry should exist after failed deposit"
+    );
+
+    // 3. Token balances unchanged — no tokens moved
+    assert_eq!(
+        token_client.balance(&user),
+        user_balance_before,
+        "User token balance must be unchanged after failed deposit"
+    );
+    assert_eq!(
+        token_client.balance(&vault_client.address),
+        vault_balance_before,
+        "Vault contract balance must be unchanged after failed deposit"
+    );
+
+    // Positive control: a deposit within the user's balance succeeds,
+    // proving the setup is sound and only the insufficient balance caused
+    // the earlier failure.
+    let success_res = vault_client.deposit(&user, &token_client.address, &50);
+    assert_eq!(success_res, 1, "Deposit within balance must succeed");
+    
+    assert_eq!(vault_client.get_user_vault_count(&user), 1);
+    assert_eq!(token_client.balance(&user), 0);
+    assert_eq!(token_client.balance(&vault_client.address), 50);
+    
+    let entry = vault_client.get_vault(&user, &token_client.address, &1);
+    assert_eq!(entry.amount, 50);
+}
+
+// ---------------------------------------------------------------------
 // Withdraw ordering (#837 / E05-15).
 //
 // DELIBERATE ORDERING: `withdraw` writes the decremented vault balance to
