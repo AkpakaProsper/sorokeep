@@ -566,6 +566,80 @@ fn test_real_upgrade_and_state_migration() {
 // balance and asserting that no vault state was created.
 // ---------------------------------------------------------------------
 
+// =====================================================================
+// E05-10 — deposit and withdraw at i128 amount extremes
+// =====================================================================
+//
+// Balances are i128, `withdraw` subtracts from a stored balance, and
+// `deposit` stores a caller-supplied amount. The failure mode is a
+// silently corrupted balance, which is cheap to test and expensive to
+// discover in production.
+//
+// Two separate assets are used for the two `i128::MAX` deposits so that
+// each deposit is funded by its own mint: minting a second `i128::MAX`
+// onto the same asset would overflow the token's own total supply and
+// make the token — not the vault — the limiting factor.
+// ---------------------------------------------------------------------
+#[test]
+fn test_deposit_and_withdraw_at_i128_extremes_do_not_corrupt_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let vault_client = setup(&env, &admin, 10);
+
+    let token_admin = Address::generate(&env);
+    let (asset_1_client, asset_1) = create_token_contract(&env, &token_admin);
+    let (asset_2_client, asset_2) = create_token_contract(&env, &token_admin);
+
+    // The token must not be the limiting factor.
+    asset_1.mint(&user, &i128::MAX);
+    asset_2.mint(&user, &i128::MAX);
+    vault_client.add_asset(&asset_1_client.address);
+    vault_client.add_asset(&asset_2_client.address);
+    assert_eq!(asset_1_client.balance(&user), i128::MAX);
+    assert_eq!(asset_2_client.balance(&user), i128::MAX);
+
+    // A deposit of i128::MAX succeeds and is stored exactly as supplied.
+    let vault_id = vault_client.deposit(&user, &asset_1_client.address, &i128::MAX);
+    assert_eq!(vault_id, 1);
+    let extreme = vault_client.get_vault(&user, &asset_1_client.address, &1);
+    assert_eq!(extreme.amount, i128::MAX);
+    assert_eq!(asset_1_client.balance(&vault_client.address), i128::MAX);
+
+    // A second deposit does not sum with the first. Vault ids are allocated
+    // per user, so this creates `(user, asset_2, 2)` alongside
+    // `(user, asset_1, 1)`; each deposit has its own entry and the contract
+    // exposes only per-vault point lookups. There is no aggregate balance
+    // and no on-chain addition of one vault's amount to another's, so there
+    // is no summation that could overflow. The second extreme deposit leaves
+    // the first entry exactly as it was.
+    let second_id = vault_client.deposit(&user, &asset_2_client.address, &i128::MAX);
+    assert_eq!(second_id, 2);
+    assert_eq!(
+        vault_client.get_vault(&user, &asset_1_client.address, &1).amount,
+        i128::MAX,
+        "the first i128::MAX vault must be unaffected by a second extreme deposit"
+    );
+    assert_eq!(
+        vault_client.get_vault(&user, &asset_2_client.address, &2).amount,
+        i128::MAX
+    );
+
+    env.ledger().with_mut(|l| l.sequence_number += 11);
+
+    // Withdrawing the full i128 balance leaves exactly zero with no
+    // wraparound from `entry.amount -= amount`.
+    vault_client.withdraw(&user, &asset_1_client.address, &1, &i128::MAX);
+    assert!(
+        vault_client.try_get_vault(&user, &asset_1_client.address, &1).is_err(),
+        "the drained i128::MAX vault should be removed, not left wrapping around"
+    );
+    assert_eq!(asset_1_client.balance(&user), i128::MAX);
+    assert_eq!(asset_1_client.balance(&vault_client.address), 0);
+}
+
 #[test]
 fn test_deposit_with_insufficient_balance_creates_no_vault() {
     // #836 / E05-14: Deposit transfers tokens before recording vault state.
